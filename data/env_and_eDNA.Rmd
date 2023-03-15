@@ -1,0 +1,440 @@
+---
+title: "env_and_eDNA"
+author: "AnaisLebrun"
+date: "2023-01-26"
+output: html_document
+---
+
+```{r setup, include=FALSE,warning = FALSE}
+library(readxl)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+#devtools::install_github("MikkoVihtakari/PlotSvalbard", upgrade = "never")
+library(PlotSvalbard)
+library(firatheme)
+library(pals)
+library(vegan)
+library(ggpubr)
+#library(phyloseq)
+#library(ape)
+library(FactoMineR)
+library(factoextra)
+library(missMDA)
+source("./eDNAindex.R")
+
+```
+
+
+
+```{r environmental data,warning = FALSE, message=FALSE}
+env_data <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/env_data.xls", 
+                            col_types = c("text", "numeric", "numeric", 
+                                                    "numeric", "date", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "text", "text"))
+# Load site location
+Site_location <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/Sites.xlsx", col_types = c("text", "numeric", "numeric", "numeric"))
+env_data<-merge(env_data,Site_location,by="Site" )
+rm(Site_location)
+
+# Load the distances to the glaciers (What about the rivers ?)
+distance_glaciers <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/distance_glaciers.xlsx", col_types = c("text", "numeric", "numeric", "numeric", "numeric", "numeric","numeric"))
+env_data<-merge(env_data,distance_glaciers,by="Site" )
+
+# Where are the eDNA sampling sites ? 
+env_data <- transform_coord(env_data, lon = "Longitude", lat = "Latitude", bind = TRUE)
+basemap("kongsfjorden", bathymetry = TRUE, bathy.detailed = TRUE, limits = c(11, 12.65, 78.85, 79.1)) + # limits in decimal degrees + 
+  geom_point(aes(x = lon.utm, y = lat.utm), env_data ,size=5)+
+  geom_text(aes(x = lon.utm, y = lat.utm,label=Site), env_data,size=7,hjust=0.5,vjust=-.8)+
+  theme_fira()+
+  theme(axis.title = element_text(size = rel(1.5), face = "bold",hjust=0.5),
+        axis.text = element_text(size = rel(1.5)),
+        legend.title = element_text(size = rel(1.5), face = "bold"),
+        plot.title = element_text(size=30, face="bold.italic",hjust = 0.5))+
+  ylab("Latitude")+
+  xlab("Longitude")
+
+# What are the salinity, temp and PAR values in those site ?
+# Salinity
+ggplot(env_data)+
+  geom_point(aes(x=week,y=sal,colour=data_origine))+
+  facet_wrap(~Site)
+  
+# Temperature
+ggplot(env_data)+
+  geom_point(aes(x=week,y=temp,colour=data_origine))+
+  facet_wrap(~Site)
+
+# PAR
+ggplot(env_data)+
+  geom_point(aes(x=week,y=`PAR [¬µmol m-2 s-1]`,colour=data_origine))+
+  facet_wrap(~Site)
+
+```
+
+
+```{r eDNA data, echo=FALSE,warning = FALSE,message=FALSE}
+## Table preparation ----
+# Loading data
+ASV_table <- read_csv("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/ASV_table.csv", col_types = cols(nReads = col_number()))
+tax_table <- read_csv("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/good.tax.table.csv")
+tax_table <- read_csv("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/good.tax.table.csv", col_types = cols(...1 = col_character()), na = "NA")
+names(tax_table)[1] = "Hash"
+
+# Merge it in one table : eDNA_table
+eDNA_table<-merge(ASV_table,tax_table,by="Hash")
+
+# Separate the Sample_name column into 5 columns : "marker","PCR","Month","Site","Filter"
+eDNA_table<-cbind(eDNA_table,Samplename=eDNA_table$Sample_name)
+eDNA_table<-separate(eDNA_table,Sample_name, c("marker","PCR", "Month","Site","Filter"), sep = "-")
+eDNA_table$Month_Site <- paste0(eDNA_table$Month,"_",eDNA_table$Site)
+# Add the name of each Site :
+eDNA_table$Site_name<-"Glacier"
+eDNA_table$Site_name[eDNA_table$Site=="2"]<-"Osian_Sarsfjellet_BC"
+eDNA_table$Site_name[eDNA_table$Site=="3"]<-"Bloomstrand_Est"
+eDNA_table$Site_name[eDNA_table$Site=="4"]<-"Hansneset"
+eDNA_table$Site_name[eDNA_table$Site=="5"]<-"French_Bird_Cliff"
+eDNA_table$Site_name[eDNA_table$Site=="6"]<-"Kongsfjordneset"
+
+# Create a column to gather the replicate (i.e. L1, L2 & L3 together)
+eDNA_table<-cbind(eDNA_table,Replicate=eDNA_table$Samplename)
+eDNA_table<-separate(eDNA_table,Replicate, c("Sample_replicate","Liter"), sep = "-L")
+
+# Add the number of the week sampling
+# 25, 26 & 27 June -> Week 25
+# 27 & 29 July -> Week 30
+# 26 & 27 August -> Week 34
+eDNA_table$week<-25
+eDNA_table$week[eDNA_table$Month=="July"]<-30
+eDNA_table$week[eDNA_table$Month=="August"]<-34
+
+  # Filtering ----
+#  Filtering contaminations ###
+eDNA_table<-eDNA_table[!eDNA_table$genus=="Homo",]
+eDNA_table<-eDNA_table[!eDNA_table$family=="Bovidae",]
+eDNA_table<-eDNA_table[!eDNA_table$class=="Insecta",]
+eDNA_table<-eDNA_table[!eDNA_table$family=="Suidae",]
+
+#  Remove non targeted taxa i.e. non benthic ###
+eDNA_table<-eDNA_table[!eDNA_table$phylum=="Bacillariophyta",]
+eDNA_table<-eDNA_table[!eDNA_table$family=="Oithonidae",]
+eDNA_table<-eDNA_table[!eDNA_table$species=="Paratanytarsus austriacus",]
+eDNA_table<-eDNA_table[!eDNA_table$family=="Clionidae",]
+eDNA_table<-eDNA_table[!eDNA_table$family=="Gadidae",]
+eDNA_table<-eDNA_table[!eDNA_table$species=="Pycnococcus provasolii",]
+eDNA_table<-eDNA_table[!eDNA_table$species=="Aurantiochytrium limacinum",]
+eDNA_table<-eDNA_table[!eDNA_table$species=="Pseudochattonella farcimen",]
+eDNA_table<-eDNA_table[!eDNA_table$class=="Aves",]
+eDNA_table<-eDNA_table[!eDNA_table$order=="Chlamydomonadales",]
+eDNA_table<-eDNA_table[!eDNA_table$class=="Dinophyceae",]
+eDNA_table<-eDNA_table[!eDNA_table$order=="Calanoida",]
+eDNA_table<-eDNA_table[!eDNA_table$class=="Monogononta",]
+
+## 1) Analysis based on the number of MOTUs ####
+eDNA_table$MOTUs<-1
+# Per month ----
+# Calculation of the number of MOTUs / Class & Month
+eDNA_MOTUs_Month<-eDNA_table %>% 
+  group_by(Month,class,MOTUs) %>%
+  summarise (sum_MOTUS = sum(MOTUs)) %>%
+  group_by(Month) %>%
+  mutate (Tot = sum(sum_MOTUS),
+          prop = sum_MOTUS / Tot) 
+eDNA_MOTUs_Month$Month <- fct_relevel(eDNA_MOTUs_Month$Month, c("June", "July","August"))
+ggplot(eDNA_MOTUs_Month, aes(x="", y=prop, fill=class)) +
+  geom_bar(stat="identity", width=1,color="white") +
+  coord_polar("y", start=0)+
+  theme_fira()+
+  theme(aspect.ratio = 1,
+        panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  scale_fill_manual(values=as.vector(kelly(20)))+
+  facet_wrap(~Month)+
+  ggtitle("Proportion of number of MOTUs per month")
+# Per site ----
+# Calculation of the number of MOTUs / Class & Site
+eDNA_MOTUs_Site<-eDNA_table %>% 
+  group_by(Site_name,class,MOTUs) %>%
+  summarise (sum_MOTUS = sum(MOTUs)) %>%
+  group_by(Site_name) %>%
+  mutate (Tot = sum(sum_MOTUS),
+          prop = sum_MOTUS / Tot) 
+
+ggplot(eDNA_MOTUs_Site, aes(x="", y=prop, fill=class)) +
+  geom_bar(stat="identity", width=1,color="white") +
+  coord_polar("y", start=0)+
+  theme_fira()+
+  theme(aspect.ratio = 1,
+        panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  scale_fill_manual(values=as.vector(kelly(20)))+
+  facet_wrap(~Site_name)+
+  ggtitle("Proportion of number of MOTUs per site")
+# Per month & site ----
+eDNA_MOTUs_month_site<-eDNA_table %>% 
+  group_by(Month_Site,class,MOTUs) %>%
+  summarise (sum_MOTUS = sum(MOTUs)) %>%
+  group_by(Month_Site) %>%
+  mutate (Tot = sum(sum_MOTUS),
+          prop = sum_MOTUS / Tot) 
+ggplot(eDNA_MOTUs_month_site, aes(x="", y=prop, fill=class)) +
+  geom_bar(stat="identity", width=1,color="white") +
+  coord_polar("y", start=0)+
+  theme_fira()+
+  theme(aspect.ratio = 1,
+        panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  scale_fill_manual(values=as.vector(kelly(20)))+
+  facet_wrap(~Month_Site)+
+  ggtitle("Proportion of number of MOTUs per site and month")
+# Shannon diversity per station & month -----
+#Calculation of the number of MOTUs / Class & Month & Site
+Shannon<-eDNA_table %>% 
+  group_by(Month,Site,class,MOTUs) %>%
+  summarise (sum_MOTUS = sum(MOTUs)) %>%
+  group_by(Month,Site) %>%
+  mutate (Tot = sum(sum_MOTUS),
+          prop = sum_MOTUS / Tot) 
+
+  # Site 1: Glacier -----
+Site1<-Shannon[Shannon$Site=="1",]
+Site1_June<-Site1[Site1$Month=="June",]
+June1<-diversity(Site1_June$sum_MOTUS,index="shannon") #2.228261
+Site1_July<-Site1[Site1$Month=="July",]
+July1<-diversity(Site1_July$sum_MOTUS,index="shannon") #2.166085
+Site1_August<-Site1[Site1$Month=="August",]
+August1<-diversity(Site1_August$sum_MOTUS,index="shannon") #0
+rm(Site1,Site1_June,Site1_July,Site1_August)
+  # Site 2: Osian_Sarsfjellet_BC -----
+Site2<-Shannon[Shannon$Site=="2",]
+Site2_June<-Site2[Site2$Month=="June",]
+June2<-diversity(Site2_June$sum_MOTUS,index="shannon") #0
+Site2_July<-Site2[Site2$Month=="July",]
+July2<-diversity(Site2_July$sum_MOTUS,index="shannon") #1.889159
+Site2_August<-Site2[Site2$Month=="August",]
+August2<-diversity(Site2_August$sum_MOTUS,index="shannon") #0
+rm(Site2,Site2_June,Site2_July,Site2_August)
+  # Site 3: Bloomstrand_Est -----
+Site3<-Shannon[Shannon$Site=="3",]
+Site3_June<-Site3[Site3$Month=="June",]
+June3<-diversity(Site3_June$sum_MOTUS,index="shannon") #1.242453
+Site3_July<-Site3[Site3$Month=="July",]
+July3<-diversity(Site3_July$sum_MOTUS,index="shannon") #0
+Site3_August<-Site3[Site3$Month=="August",]
+August3<-diversity(Site3_August$sum_MOTUS,index="shannon") #1.732868
+rm(Site3,Site3_June,Site3_July,Site3_August)
+  # Site 4: Hansneset -----
+Site4<-Shannon[Shannon$Site=="4",]
+Site4_June<-Site4[Site4$Month=="June",]
+June4<-diversity(Site4_June$sum_MOTUS,index="shannon") #1.303092
+Site4_July<-Site4[Site4$Month=="July",]
+July4<-diversity(Site4_July$sum_MOTUS,index="shannon") #1.676988
+Site4_August<-Site4[Site4$Month=="August",]
+August4<-diversity(Site4_August$sum_MOTUS,index="shannon") #2.030809
+rm(Site4,Site4_June,Site4_July,Site4_August)
+  # Site 5: French_Bird_Cliff -----
+Site5<-Shannon[Shannon$Site=="5",]
+Site5_June<-Site5[Site5$Month=="June",]
+June5<-diversity(Site5_June$sum_MOTUS,index="shannon") #2.038321
+Site5_July<-Site5[Site5$Month=="July",]
+July5<-diversity(Site5_July$sum_MOTUS,index="shannon") #0
+Site5_August<-Site5[Site5$Month=="August",]
+August5<-diversity(Site5_August$sum_MOTUS,index="shannon") #0
+rm(Site5,Site5_June,Site5_July,Site5_August)
+  # Site 6: Kongsfjordneset -----
+Site6<-Shannon[Shannon$Site=="6",]
+Site6_June<-Site6[Site6$Month=="June",]
+June6<-diversity(Site6_June$sum_MOTUS,index="shannon") #0
+Site6_July<-Site6[Site6$Month=="July",]
+July6<-diversity(Site6_July$sum_MOTUS,index="shannon") #0.6931472
+Site6_August<-Site6[Site6$Month=="August",]
+August6<-diversity(Site6_August$sum_MOTUS,index="shannon") #1.791759
+rm(Site6,Site6_June,Site6_July,Site6_August)
+  # Create the table and plot data ----
+vecteur1 <- c("June","June","June","June","June","June","July","July","July","July","July","July","August","August","August","August","August","August")
+vecteur2 <- c("Site1","Site2","Site3","Site4","Site5","Site6","Site1","Site2","Site3","Site4","Site5","Site6","Site1","Site2","Site3","Site4","Site5","Site6")
+vecteur3 <- c("Glacier","Osian_Sarsfjellet_BC","Bloomstrand_Est","Hansneset","French_Bird_Cliff","Kongsfjordneset","Glacier","Osian_Sarsfjellet_BC","Bloomstrand_Est","Hansneset","French_Bird_Cliff","Kongsfjordneset","Glacier","Osian_Sarsfjellet_BC","Bloomstrand_Est","Hansneset","French_Bird_Cliff","Kongsfjordneset")
+vecteur4<-c(June1,June2,June3,June4,June5,June6,July1,July2,July3,July4,July5,July6,August1,August2,August3,August4,August5,August6)
+rm(June1,June2,June3,June4,June5,June6,July1,July2,July3,July4,July5,July6,August1,August2,August3,August4,August5,August6)
+tableau <- data.frame(vecteur1,vecteur2,vecteur3,vecteur4) 
+rm(vecteur1,vecteur2,vecteur3,vecteur4)
+tableau <- tableau %>% 
+  rename("Month"="vecteur1",
+         "Site"="vecteur2",
+         "Site_name"="vecteur3",
+         "Shannon_diversity"="vecteur4")
+
+ggplot(tableau)+
+  geom_point(aes(x=Site_name,y=Shannon_diversity,color=Month),size=7)+
+  theme_fira()
+
+## 2) Use of the eDNA index (based on the nReads) ####
+#Calculation eDNA index - Class level
+eDNA_table<-eDNA_table[!eDNA_table$class=="",]
+
+  # Per month ####
+eDNA_index_month<-eDNAindex(eDNA_table,Month,OTU_column=class,Counts_column=nReads)
+eDNA_index_month<-eDNA_index_month %>% 
+ # In case the sample column is of a higher group than the nrows
+  group_by(Month) %>%
+  mutate (Tot = sum(Normalized.reads),
+          proportion = (Normalized.reads / Tot))
+eDNA_index_month$Month <- fct_relevel(eDNA_index_month$Month, c("June", "July","August"))
+# Piechart
+ggplot(eDNA_index_month, aes(x="", y=proportion, fill=class)) +
+  geom_bar(stat="identity", width=1,color="white") +
+  coord_polar("y", start=0)+
+  theme_fira()+
+  theme(aspect.ratio = 1,
+        panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  scale_fill_manual(values=as.vector(kelly(20)))+
+  facet_wrap(~Month)+
+  #ggtitle("Proportion of eDNA indexes per month")
+  ggtitle("Proportion of normalized eDNA reads per month")
+
+  # Per Site ####
+eDNA_index_site<-eDNAindex(eDNA_table,Site_name,OTU_column=class,Counts_column=nReads)
+eDNA_index_site<-eDNA_index_site %>% 
+  group_by(Site_name) %>%
+  mutate (Tot = sum(Normalized.reads),
+          proportion = Normalized.reads / Tot) 
+ggplot(eDNA_index_site, aes(x="", y=proportion, fill=class)) +
+  geom_bar(stat="identity", width=1,color="white") +
+  coord_polar("y", start=0)+
+  theme_fira()+
+  theme(aspect.ratio = 1,
+        panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  scale_fill_manual(values=as.vector(kelly(20)))+
+  facet_wrap(~Site_name)+
+  #ggtitle("Proportion of eDNA indexes per site")
+  ggtitle("Proportion of normalized eDNA reads per site")
+
+  # Per month & site ####
+eDNA_index_month_site<-eDNAindex(eDNA_table,Month_Site,OTU_column=class,Counts_column=nReads)
+eDNA_index_month_site<-eDNA_index_month %>% 
+ # In case the sample column is of a higher group than the nrows
+  group_by(Month_Site) %>%
+  mutate (Tot = sum(Normalized.reads),
+          proportion = (Normalized.reads / Tot))
+
+ggplot(eDNA_index_month_site, aes(x="", y=proportion, fill=class)) +
+  geom_bar(stat="identity", width=1,color="white") +
+  coord_polar("y", start=0)+
+  theme_fira()+
+  theme(aspect.ratio = 1,
+        panel.grid = element_blank(),
+        axis.title.x = element_blank(),
+        axis.line.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.text = element_blank(),
+        axis.ticks = element_blank())+
+  scale_fill_manual(values=as.vector(kelly(20)))+
+  facet_wrap(~Month_Site)+
+  #ggtitle("Proportion of eDNA indexes per site")
+  ggtitle("Proportion of normalized eDNA reads per site")
+
+
+
+```
+
+
+```{eDNA & env data, echo=FALSE,warning = FALSE,message=FALSE}
+# Plot diversity along glacier distance (what about rivers & currents ?)
+colnames(distance_glaciers)[1]<-"Site_name"
+diversity_distance<-merge(tableau,distance_glaciers,by="Site_name")
+#diversity_distance<-diversity_distance[diversity_distance$Shannon_diversity!=0,]
+#diversity_distance[diversity_distance$Shannon_diversity=="0"]<-NA # Remplacer 0 par NA ##### ICI #####
+ggplot(diversity_distance)+
+  geom_point(aes(x=total_distance,y=Shannon_diversity,color=Month),size=7)+
+  #geom_smooth(aes(x=total_distance,y=Shannon_diversity))+
+  theme_fira()
+
+# Correlation between presence of a taxa and environmental parameters ?
+# Preparation of dataframes 
+# 1) env_data
+colnames(env_data)[1]<-"Site_name"
+env_data$site_name_week<-paste0(env_data$Site_name,"_",env_data$week)
+# 2) eDNA_index_month_site
+eDNA_index_month_site$month_site<-eDNA_index_month_site$Month_Site
+eDNA_index_month_site<-separate(eDNA_index_month_site,Month_Site, c("Month","Site"), sep = "_")
+
+eDNA_index_month_site$week<-25
+eDNA_index_month_site$week[eDNA_index_month_site$Month=="July "]<-30 
+eDNA_index_month_site$week[eDNA_index_month_site$Month=="August "]<-34 
+
+eDNA_index_month_site$Site_name<-"Glacier"
+eDNA_index_month_site$Site_name[eDNA_index_month_site$Site==" 2"]<-"Osian_Sarsfjellet_BC"
+eDNA_index_month_site$Site_name[eDNA_index_month_site$Site==" 3"]<-"Bloomstrand_Est"
+eDNA_index_month_site$Site_name[eDNA_index_month_site$Site==" 4"]<-"Hansneset"
+eDNA_index_month_site$Site_name[eDNA_index_month_site$Site==" 5"]<-"French_Bird_Cliff"
+eDNA_index_month_site$Site_name[eDNA_index_month_site$Site==" 6"]<-"Kongsfjordneset"
+
+eDNA_index_month_site$site_name_week<-paste0(eDNA_index_month_site$Site_name,"_",eDNA_index_month_site$week)
+
+  # Preparation of the data_table to do a PCA
+spread_eDNA_index<-eDNA_index_month_site %>%
+  select(-c(Month,Site,Tot,proportion,month_site,week,Site_name)) %>%
+  spread(class,Normalized.reads)
+spread_eDNA_index[is.na(spread_eDNA_index)] <- 0
+
+# Merge
+PCA<-merge(spread_eDNA_index,env_data,by="site_name_week")
+
+# Remove some columns and change the location of others
+PCA<-PCA%>% 
+  select(-c(date,Site_name,site_name_week,data_origine,Remark,lon.utm,lat.utm))%>% 
+  relocate(Latitude, .after = depth)%>%
+  relocate(Longitude, .after = Latitude)
+
+# ICI # METTRE NUMERO DE SITE EN 1ère colonne [,1] pour que soit considéré comme ind (et non var)
+res<-MFA(PCA,group=c(16,5,14,1,6))
+fviz_mfa_var(res.mfa, "quanti.var", palette = "jco", 
+             col.var.sup = "violet", repel = TRUE,
+             geom = c("point", "text"), legend = "bottom")
+
+fviz_contrib(res, choice = "quanti.var", axes = 1, top = 20,
+             palette = "jco")
+
+fviz_contrib(res, choice = "quanti.var", axes = 2, top = 20,
+             palette = "jco")
+
+# nMDS eDNA / environmental parameters -> MOTUs
+# nMDS eDNA / environmental parameters -> eDNA index
+# Phylogenic tree (Fig 1) with taxa "abundances" based on : number of MOTUS vs. eDNA index
+# Heatmap ?
+# 
+
+```
+
