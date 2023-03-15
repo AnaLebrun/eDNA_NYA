@@ -1,0 +1,743 @@
+---
+title: "eDNA_script"
+author: "AnaisLebrun"
+date: "2023-03-15"
+output: html_document
+---
+
+In this .rmd are presented the environmental and eDNA data collected in Kongsfjorden (Svalbard, Norway) in summer 2021. Six sites were sampled in June, July & August. Those sites are located along a salinity and light gradient induced by the melting of the glaciers, from the inner to the outer part of the fjord.  
+Environmental data collected at the bottom are : temperature, salinity, PAR, alkalinity, pH, chlorophyll a & nutrients concentration (NO2, NO3, SIOH4 & PO4).  
+eDNA was sampled in triplicates in each site (3 x 1L, biological replicates). PCR was conducted two times for each sample (technical replicates). Two primers were used : COI & 18S. In this file we gather the results from both primers and gather the replicates together as well.  
+
+```{r setup,echo=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE,fig.align="center",results=FALSE, echo=FALSE)
+
+# Load the Packages
+library(readxl)
+library(ggplot2)
+suppressPackageStartupMessages(library(tidyverse))
+library(dplyr)
+library(ggu.base.fun)
+#devtools::install_github("MikkoVihtakari/PlotSvalbard", upgrade = "never")
+library(PlotSvalbard)
+library(firatheme)
+library(FactoMineR)
+suppressPackageStartupMessages(library(factoextra))
+suppressPackageStartupMessages(library(vegan))
+setwd("~/Desktop/These/Field-eDNA/eDNA/R-eDNA")
+source("./scripts/eDNAindex.R") #https://github.com/ramongallego/eDNA_functions
+```
+
+```{r Load}
+# Load the env_data
+env_data <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/env_data.xls", 
+                            col_types = c("text", "numeric", "numeric", 
+                                                    "numeric", "date", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "numeric", "numeric", 
+                                                    "numeric", "text", "text"))
+# Load site location
+Site_location <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/Sites.xlsx", col_types = c("text", "numeric", "numeric", "numeric"))
+env_data<-merge(env_data,Site_location,by="Site" )
+rm(Site_location)
+```
+
+```{r plot envionmental data, fig.width=10,  fig.height=7}
+
+# Map site location
+env_data <- transform_coord(env_data, lon = "Longitude", lat = "Latitude", bind = TRUE)
+basemap("kongsfjorden", bathymetry = TRUE, bathy.detailed = TRUE, limits = c(11, 12.65, 78.85, 79.1)) + # limits in decimal degrees + 
+  geom_point(aes(x = lon.utm, y = lat.utm), env_data ,size=5)+
+  geom_text(aes(x = lon.utm, y = lat.utm,label=Site),size=4,env_data,hjust=0.8,vjust=-.8)+
+  theme_fira()+
+  theme(axis.title = element_text(size = rel(1.5), face = "bold",hjust=0.5),
+        axis.text = element_text(size = rel(1.5)),
+        legend.title = element_text(size = rel(1.5), face = "bold"),
+        plot.title = element_text(size=30, face="bold.italic",hjust = 0.5))+
+  ylab("Latitude")+
+  xlab("Longitude")
+```
+
+## Results {.tabset}
+### Environmental data
+Only a few environmental parameters varied within sites. We selected: salinity, Kd (diffuse attenuation coefficient, it is a measure of how light dissipates with depth in water) and nutrients concentration (NO2, NO3, SIOH4 & PO4) to distinguish the sites.  
+Depending on the sampling period and the location of each sites, some sites can be gathered based on those environmental parameters. Here, we cluster the sites based on each period.  
+
+```{r sites clustering based on envionmental data,fig.show='hide'}
+# Cluster the sites & months based on salinity, Kd & Nutrients
+env_data$site_week <- paste0(env_data$Site,"_",env_data$week)
+bottom_env_data<-env_data[multi_grep("bottom",env_data$Remark),]
+bottom_env_data<-env_data[multi_grep(c("25","30","34"),env_data$week),]
+bottom_env_data<-bottom_env_data%>%
+  select(-c("Site", "depth", "year", "week", "date", "temp","PAR [¬µmol m-2 s-1]","mean_pH","std_pH","mean_alka","std_alk","chla","pheo","data_origine","Remark","Latitude","Longitude","Site_number","lon.utm","lat.utm"))
+bottom_env_data<-bottom_env_data %>%
+  drop_na() %>%
+  relocate(site_week)
+rownames(bottom_env_data)<-bottom_env_data[,1]
+bottom_env_data<-bottom_env_data[,-1]
+view(bottom_env_data)
+#bottom_env_data<-t(bottom_env_data)
+
+bottom_env_data_scale <- scale(bottom_env_data) # standardize variables
+
+# Determine number of clusters
+wss <- (nrow(bottom_env_data_scale)-1)*sum(apply(bottom_env_data_scale,2,var))
+for (i in 1:14) wss[i] <- sum(kmeans(bottom_env_data_scale, 
+   centers=i)$withinss)
+plot(1:14, wss, type="b", xlab="Number of Clusters",
+  ylab="Within groups sum of squares")
+# Cluster = 4
+fit <- kmeans(bottom_env_data_scale, 4) # 4 cluster solution
+
+res.PCA<-PCA(bottom_env_data_scale,ncp=Inf, scale.unit=FALSE,graph=FALSE)
+env_pca_varplot<-plot(res.PCA,choix="varcor")
+res.HCPC<-HCPC(res.PCA,nb.clust=5,consol=FALSE,graph=FALSE)
+#plot.HCPC(res.HCPC,choice='3D.map',ind.names=FALSE,centers.plot=FALSE,angle=60,title='Hierarchical tree on the factor map')
+```
+
+#### Clustering {.tabset .tabset-pills}
+##### PCA Variables
+```{r env_data PCA Variables}
+env_pca_varplot
+```
+
+The first axis explains almost 69% of the variances. The second one explains almost 18%. Thus more than 86% of the variance between the sites explained by this PCA.  
+Let's see where the sites are located on this PCA and how we can cluster them (2nd blue tab).  
+
+##### PCA individuals (i.e. sites) & treeplot
+```{r senv_data sum of squares}
+plot(1:14, wss, type="b", xlab="Number of Clusters",
+  ylab="Within groups sum of squares")
+```
+
+Giving the total withing groups sum of squares graph, the optimal number of clusters is five.   
+
+```{r senv_data PCA Individuals}
+plot.HCPC(res.HCPC,choice='map',draw.tree=FALSE,title='Factor map')
+```
+
+Remark: "Glacier_25" = "Nameofthesite_week" (week=25 for June, 30 for July & 34 for August).  
+
+```{r env_data treeplot}
+plot.HCPC(res.HCPC,choice='tree',title='Hierarchical tree')
+```
+
+- Cluster A (black): high salinity, low [nutrients] (before melting & not impacted by melting): 
+  - Glacier_25,  
+  - Osian_Sarsfjellet_BC_25,  
+  - French_Bird_Cliff_25,  
+  - Bloomstrand_Est_25,  
+  - Hansneset_25,  
+  - Kongsfjordneset_25,  
+  - Kongsfjordneset_34,  
+  - Kongsfjordneset_30  
+- Cluster B (light blue): low light (glacier during melting) :   
+  - Glacier_30  
+- Cluster C (dark blue): higher [nutrients] (after melting) :  
+  - Hansneset_30,  
+  - Bloomstrand_Est_30,  
+  - Osian_Sarsfjellet_BC_30,  
+  - French_Bird_Cliff_30,  
+  - Glacier_34  
+- Cluster D (red): low salinity (melting) & low [nutrients] :  
+  - Hansneset_34  
+- Cluster E (green): low salinity (melting) :  
+  - Osian_Sarsfjellet_BC_34,  
+  - Bloomstrand_Est_34,  
+
+##### Maps
+```{r cluster map plot,results = FALSE}
+# Map of the clusters
+# June
+basemap("kongsfjorden", bathymetry = TRUE, bathy.detailed = TRUE, limits = c(11, 12.65, 78.85, 79.1)) + # limits in decimal degrees + 
+  geom_point(aes(x = lon.utm, y = lat.utm,color=Site), env_data ,size=5)+
+  geom_text(aes(x = lon.utm, y = lat.utm,label=Site,color=Site),size=4,env_data,hjust=0.8,vjust=-.8)+
+  theme_fira()+
+  scale_color_manual(values=c("black","black","black","black","black","black"))+
+  theme(legend.position = "none",
+        axis.title = element_text(size = rel(1.5), face = "bold",hjust=0.5),
+        axis.text = element_text(size = rel(1.5)),
+        legend.title = element_text(size = rel(1.5), face = "bold"),
+        plot.title = element_text(size=30, face="bold.italic",hjust = 0.5))+
+  ggtitle("June")+
+  ylab("Latitude")+
+  xlab("Longitude")
+
+# July
+basemap("kongsfjorden", bathymetry = TRUE, bathy.detailed = TRUE, limits = c(11, 12.65, 78.85, 79.1)) + # limits in decimal degrees + 
+  geom_point(aes(x = lon.utm, y = lat.utm,color=Site), env_data ,size=5)+
+  geom_text(aes(x = lon.utm, y = lat.utm,label=Site,color=Site),size=4,env_data,hjust=0.8,vjust=-.8)+
+  theme_fira()+
+  scale_color_manual(values=c("darkblue","darkblue","lightblue","darkblue","black","darkblue"))+
+  theme(legend.position = "none",
+        axis.title = element_text(size = rel(1.5), face = "bold",hjust=0.5),
+        axis.text = element_text(size = rel(1.5)),
+        legend.title = element_text(size = rel(1.5), face = "bold"),
+        plot.title = element_text(size=30, face="bold.italic",hjust = 0.5))+
+  ggtitle("July")+
+  ylab("Latitude")+
+  xlab("Longitude")
+
+# August
+basemap("kongsfjorden", bathymetry = TRUE, bathy.detailed = TRUE, limits = c(11, 12.65, 78.85, 79.1)) + # limits in decimal degrees + 
+  geom_point(aes(x = lon.utm, y = lat.utm,color=Site), env_data ,size=5)+
+  geom_text(aes(x = lon.utm, y = lat.utm,label=Site,color=Site),size=4,env_data,hjust=0.8,vjust=-.8)+
+  theme_fira()+
+  scale_color_manual(values=c("green","white","darkblue","darkred","black","green"))+
+  theme(legend.position = "none",
+        axis.title = element_text(size = rel(1.5), face = "bold",hjust=0.5),
+        axis.text = element_text(size = rel(1.5)),
+        legend.title = element_text(size = rel(1.5), face = "bold"),
+        plot.title = element_text(size=30, face="bold.italic",hjust = 0.5))+
+  ggtitle("August")+
+  ylab("Latitude")+
+  xlab("Longitude")
+```
+  
+Remark: the CTD was not working the day we sampled French Bird Cliff in August. We therefore can't cluster this site.  
+  
+##### Summary
+
+Several sites belong to the same cluster over the same periods, such as Bloomstrand Est & Osian Sars (& French Bird Cliff in June & July, no info in August).  
+Other sites are more isolated such as Kongsfjordneset, which belong to the same cluster (A) all summer long, meaning the glacier melting may not impact it.  
+Glacier and Hansneset stand out from the other sites, from July to August for the first site & only in August for the 2nd site.   
+Based on the clusters we have, we can group our sites :  
+- Group 1: Bloomstrand Est, Osian Sars & French Bird Cliff <- middle fjord, equally impacted by glacier melting (same cluster in June, July & August).  
+- Group 2: Kongsfjordeneset <- not impacted by glacier melting.  
+- Group 3: Glacier & Hansneset <- both close to a glacier & standing out from the other sites.    
+  
+Let's use these clusters & groups on the eDNA data and see if we can distinguish them (2nd tab "eDNA data").
+  
+  
+### eDNA data
+```{r Load & prepare eDNA data,results = FALSE}
+# Load and merge 18S data
+ASV_table_18S <- read_csv("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/18S_ASV_table_fwd.csv", col_types = cols(nReads = col_number()))
+tax_table_18S <- read_delim("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/tax_table_S_modified.csv",delim = ";", escape_double = FALSE, trim_ws = TRUE)
+eDNA_table_18S<-merge(ASV_table_18S,tax_table_18S,by="Hash")
+# Load and merge COI data
+ASV_table_COI <- read_csv("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/COI_ASV_table.csv", col_types = cols(nReads = col_number()))
+tax_table_COI <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/COI.xls")
+eDNA_table_COI<-merge(ASV_table_COI,tax_table_COI,by="Hash")
+
+# Filter COI (18S already done)####
+# Contamination
+eDNA_table_COI<-eDNA_table_COI[-multi_grep("Homo",eDNA_table_COI$Genus),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep(c("Bovidae","Suidae"),eDNA_table_COI$Family),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep("Insecta",eDNA_table_COI$Class),]
+#  Remove non targeted taxa i.e. non benthic or unicellular ###
+eDNA_table_COI<-eDNA_table_COI[-multi_grep("Bacteria",eDNA_table_COI$Domain),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep(c("Bacillariophyta","Amoebozoa","Basidiomycota","Bigyra","Myzozoa","Parmales","Haptophyta","Ascomycota"),eDNA_table_COI$Phylum),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep(c("Haptophyta","Chrysophyceae","Aves","Actinopteri"),eDNA_table_COI$Class),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep(c("Pedinellales","Dictyochales","Ochromonadales","Calanoida"),eDNA_table_COI$Order),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep(c("Oithonidae","Clionidae","Gadidae"),eDNA_table_COI$Family),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep(c("Bathycoccus","Micromonas","Nannochloris","Chloroparvula"),eDNA_table_COI$Genus),]
+eDNA_table_COI<-eDNA_table_COI[-multi_grep(c("Nematoda","Oomycota","Ascomycota"),eDNA_table_COI$Phylum),]
+
+# Filter forgotten classes & phylum in the 18S 
+eDNA_table_18S<-eDNA_table_18S[-multi_grep(c("Arachnida","Leotiomycetes","Myxozoa","Nephroselmidophyceae","Oomycetes"),eDNA_table_18S$Class),]
+eDNA_table_18S<-eDNA_table_18S[-multi_grep(c("Nematoda"),eDNA_table_18S$Phylym),]
+eDNA_table_18S<-eDNA_table_18S[-multi_grep(c("Harpacticoida", "Cyclopoida"),eDNA_table_18S$Order),]
+
+# merge 18S & COI data
+names(eDNA_table_18S) <- names(eDNA_table_COI) 
+eDNA_table<-rbind(eDNA_table_COI,eDNA_table_18S)
+
+# calculate the total nReads in each phylum in each sample
+table<-eDNA_table %>%
+  drop_na(Phylum)%>%
+  group_by(Sample_name,Phylum) %>%
+  summarise(Tot_nReads=sum(nReads))%>%
+  ungroup()
+
+# Separate the Sample_name column into 5 columns : "marker","PCR","Month","Site","Filter"
+table<-cbind(table,Samplename=table$Sample_name)
+table <- relocate(table,Samplename)
+table<-separate(table,Sample_name, c("marker","PCR", "Month","Site","Filter"), sep = "-")
+
+# Add the name of the sites
+table$Site_name<-"Glacier"
+table$Site_name[table$Site=="2"]<-"Osian_Sarsfjellet_BC"
+table$Site_name[table$Site=="3"]<-"Bloomstrand_Est"
+table$Site_name[table$Site=="4"]<-"Hansneset"
+table$Site_name[table$Site=="5"]<-"French_Bird_Cliff"
+table$Site_name[table$Site=="6"]<-"Kongsfjordneset"
+
+# Add the week number (25 for June, 30 for July, 34 for August)
+table$week<-25
+table$week[table$Month=="July"]<-30
+table$week[table$Month=="August"]<-34
+
+# create a column with both information: name of the site & week
+table$site_week <- paste0(table$Site_name,"_",table$week)
+
+#create a column indicating the environmental cluster to which the samples belong
+# Group A 
+table$cluster<-"A"
+# Group B: Glacier_30
+table$cluster[table$site_week=="Glacier_30"]<-"B"
+# Group C: Hansneset_30, Bloomstrand_Est_30, Osian_Sarsfjellet_BC_30, French_Bird_Cliff_30, Glacier_34
+table$cluster[table$site_week=="Hansneset_30"]<-"C"
+table$cluster[table$site_week=="Bloomstrand_Est_30"]<-"C"
+table$cluster[table$site_week=="Osian_Sarsfjellet_BC_30"]<-"C"
+table$cluster[table$site_week=="French_Bird_Cliff_30"]<-"C"
+table$cluster[table$site_week=="Glacier_34"]<-"C"
+# Group D: hansneset_34 
+table$cluster[table$site_week=="Hansneset_34"]<-"D"
+# Group E: Osian_Sarsfjellet_BC_34,  Bloomstrand_Est_34,
+table$cluster[table$site_week=="Osian_Sarsfjellet_BC_34"]<-"E"
+table$cluster[table$site_week=="Bloomstrand_Est_34"]<-"E"
+
+
+# calculate the total nReads in each phylum in each cluster & site
+table_cluster<-table %>%
+  drop_na(Phylum,Site)%>%
+  group_by(Phylum,Site,week) %>%
+  summarise(Tot_nReads=sum(Tot_nReads))%>%
+  ungroup()
+head(table_cluster)
+
+table_cluster$Cluster_site<-paste0(table_cluster$Site,"_",table_cluster$week)
+
+# calculate the eDNA index based on the cluster & site
+table_eDNAindex<-eDNAindex(table_cluster,Cluster_site,Phylum,Tot_nReads)
+
+data<-table_eDNAindex #for bubleplot later
+
+# Organize the table to do the nmds
+table_eDNAindex<-table_eDNAindex %>%
+  spread(Phylum,Normalized.reads)
+table_eDNAindex[is.na(table_eDNAindex)] <- 0
+table_eDNAindex<-as.data.frame(table_eDNAindex)
+table_L1_L2<-table_eDNAindex #for later
+rownames(table_eDNAindex) <- table_eDNAindex[,1]
+table_eDNAindex<-table_eDNAindex[,-1] 
+table_eDNAindex <- table_eDNAindex %>% mutate_if(is.character, as.numeric)
+table_eDNAindex<-as.matrix(table_eDNAindex)
+#table_eDNAindex<-t(table_eDNAindex)
+# NMDS:
+nmds<-metaMDS(table_eDNAindex)
+#stressplot(nmds)
+
+# organise the table to plot the nmds with polygons
+table_eDNAindex<-as.data.frame(table_eDNAindex)
+#table_eDNAindex$Cluster<-c("A","A","A","A","A","A",
+                         #"B","C","C","C","C","C",
+                         #"D","D","D")
+table_eDNAindex$Cluster<-c("A","B","C","A","C","E","A","C","E","A","C","D","A","C","F","A","A","A")
+#table_eDNAindex$Site<-c("1","2","3","4","5","6","1","1","2","3","4","5","2","3","4")
+table_eDNAindex$Site<-c("1","1","1","2","2","2","3","3","3","4","4","4","5","5","5","6","6","6")
+table_eDNAindex$Month<-c("June","July","August","June","July","August","June","July","August","June","July","August","June","July","August","June","July","August")
+plottingdata <- table_eDNAindex %>% 
+  dplyr::select(Cluster,Site,Month) %>% 
+  distinct() %>% 
+  unite(c(Cluster,Site,Month), col = "sample_name", remove = F) %>% 
+  mutate(nmds_i = nmds$points[,1],
+         nmds_j = nmds$points[,2]) 
+
+A <- plottingdata[plottingdata$Cluster== "A", ][chull(plottingdata[plottingdata$Cluster== 
+                                                                   "A", c("nmds_i", "nmds_j")]), ] 
+B <- plottingdata[plottingdata$Cluster== "B", ][chull(plottingdata[plottingdata$Cluster== 
+                                                                   "B", c("nmds_i", "nmds_j")]), ] 
+C <- plottingdata[plottingdata$Cluster== "C", ][chull(plottingdata[plottingdata$Cluster== 
+                                                                   "C", c("nmds_i", "nmds_j")]), ] 
+D <- plottingdata[plottingdata$Cluster== "D", ][chull(plottingdata[plottingdata$Cluster== 
+                                                                   "D", c("nmds_i", "nmds_j")]), ] 
+E <- plottingdata[plottingdata$Cluster== "E", ][chull(plottingdata[plottingdata$Cluster== 
+                                                                   "E", c("nmds_i", "nmds_j")]), ] 
+hull.data <- rbind(A,B,C,D,E) 
+
+plottingdata %>% 
+ggplot(aes(x = nmds_i, y = nmds_j)) +
+    #geom_point() +
+    geom_text(aes(x = nmds_i, y = nmds_j, label = sample_name), size = 2) +
+    geom_polygon(data = hull.data, aes(x = nmds_i, y = nmds_j, group = Cluster, fill = Cluster), alpha = .5)+
+    scale_fill_manual(values=c("black","lightblue","darkblue","lightgreen","red"))
+
+```
+
+Here we did an nmds analysis based on the eDNA data (eDNA index, phylum level). We colored the sites & periods by the clusters we precedently obtain (i.e. based on the environmental parameters). For example: Hansneset in June is in Cluster A and thus colored in black, in July it is from cluster C and thus colored in green (not visible here because less than 3 sites in this cluster meaning we can't draw a polygon).    
+We can see that the sites are very scattered, especially for cluster A (cluster with the most sites).  
+Remark: A_1_June = Cluster_Site_Period
+
+```{r heatmap based on the eDNA index/cluster}
+# Let's create a heatmap based on the eDNA index/cluster
+# Organise the table
+heatmap_cluster<-table %>%
+  select(-c("marker","PCR","Month","Site","Filter","Samplename","Site_name","week","site_week"))%>%
+  eDNAindex(cluster,Phylum,Tot_nReads)%>%
+  spread(Phylum,Normalized.reads)
+heatmap_cluster<-as.data.frame(heatmap_cluster)
+rownames(heatmap_cluster) <- heatmap_cluster[,1]
+heatmap_cluster<-heatmap_cluster[,-1] 
+heatmap_cluster[is.na(heatmap_cluster)] <- 0
+heatmap_cluster<-as.matrix(heatmap_cluster)
+# heatmap
+heatmap(heatmap_cluster)
+```
+
+This heatmap is based on the sum per cluster of the eDNAindexes calculated from the total nReads in each site. Remember that cluster B is characterized by low light. Here, we can see that the values of the algae phyla (Rhodophyta, Ochrophyta, and Chlorophyta) are low. Hence, the hypothesis could be that low light induces less algae (keeping in mind the bias in nReads).
+Cluster C is characterized by a high nutrients concentration and shows a good diversity with many phyla with high values (see on the heatmap, from Arthropoda to Bryozoa). This could make sense but let's look closer at the data.     
+
+```{r bubble based on the eDNA index/cluster}
+# Let's create a bubble plot based on the eDNA index/cluster
+data$clust_bubble<-"A_1"
+data$clust_bubble[data$Cluster_site=="1_30"]<-"B_1"
+data$clust_bubble[data$Cluster_site=="1_34"]<-"C_1"
+data$clust_bubble[data$Cluster_site=="2_25"]<-"A_2"
+data$clust_bubble[data$Cluster_site=="2_30"]<-"C_2"
+data$clust_bubble[data$Cluster_site=="2_34"]<-"E_2"
+data$clust_bubble[data$Cluster_site=="3_25"]<-"A_3"
+data$clust_bubble[data$Cluster_site=="3_30"]<-"C_3"
+data$clust_bubble[data$Cluster_site=="3_34"]<-"E_3"
+data$clust_bubble[data$Cluster_site=="4_25"]<-"A_4"
+data$clust_bubble[data$Cluster_site=="4_30"]<-"C_4"
+data$clust_bubble[data$Cluster_site=="4_34"]<-"D_4"
+data$clust_bubble[data$Cluster_site=="5_25"]<-"A_5"
+data$clust_bubble[data$Cluster_site=="5_30"]<-"C_5"
+data$clust_bubble[data$Cluster_site=="5_34"]<-"none"
+data$clust_bubble[data$Cluster_site=="6_25"]<-"A_6_a"
+data$clust_bubble[data$Cluster_site=="6_30"]<-"A_6_b"
+data$clust_bubble[data$Cluster_site=="6_34"]<-"A_6_c"
+
+data %>%
+  arrange(desc(Normalized.reads)) %>%
+  ggplot(aes(x=clust_bubble, y=Phylum, size=Normalized.reads,colour=Normalized.reads)) +
+  geom_point(alpha=0.7) +
+  scale_size(range = c(.05, 7), name="eDNA index")+
+  #scale_colour_viridis(direction=-1)+
+  theme(axis.text.x = element_text(colour = "black", size = 12, face = "bold", angle = 60, vjust = 0.3, hjust = 0.5))+
+  annotate("rect", xmin = 0, xmax = 8.5, ymin = 0, ymax = 13, alpha = .5,fill="grey")+
+  annotate("rect", xmin = 8.5, xmax = 9.5, ymin = 0, ymax = 13, alpha = .5,fill="lightblue")+
+  annotate("rect", xmin = 9.5, xmax = 14.5, ymin = 0, ymax = 13, alpha = .5,fill="darkblue")+
+  annotate("rect", xmin = 14.5, xmax = 15.5, ymin = 0, ymax = 13, alpha = .5,fill="lightgreen")+
+  annotate("rect", xmin = 15.5, xmax = 17.5, ymin = 0, ymax = 13, alpha = .5,fill="red")
+```
+
+In cluster C, only two sites (out of 5) present the reads of Arthropoda phylum. But if we look again at the heatmap we see that averaging the 5 sites induces this phylum to be highlighted in dark red in this cluster, unless more than half of the sites doesn't have any Arthropoda reads.  
+Looking a the cluster, none of the phylum seems to be equally present in each cluster. Therefore, and this joins what we saw previously with the results of the nmds, the environmental clusters do not explain the biodiversity obtained (and especially its variance within sites & periods) with the eDNA tool.  
+Remark : the "none" corresponds to the site French Bird Cliff in August when the CTD was not working so we could'nt cluster it.  
+Before to do more analysis, let's sit and watch the eDNA data site by site, week by week.  
+
+
+```{r nmds on env groups}
+table_eDNAindex$group<-c("3","3","3","1","1","1","1","1","1","3","3","3","1","1","1","2","2","2")
+#table_eDNAindex$Site<-c("1","2","3","4","5","6","1","1","2","3","4","5","2","3","4")
+table_eDNAindex$Site<-c("1","1","1","2","2","2","3","3","3","4","4","4","5","5","5","6","6","6")
+table_eDNAindex$Month<-c("June","July","August","June","July","August","June","July","August","June","July","August","June","July","August","June","July","August")
+plottingdata <- table_eDNAindex %>% 
+  dplyr::select(group,Site,Month) %>% 
+  distinct() %>% 
+  unite(c(group,Site,Month), col = "sample_name", remove = F) %>% 
+  mutate(nmds_i = nmds$points[,1],
+         nmds_j = nmds$points[,2]) 
+
+One <- plottingdata[plottingdata$group== "1", ][chull(plottingdata[plottingdata$group== 
+                                                                   "1", c("nmds_i", "nmds_j")]), ] 
+Two <- plottingdata[plottingdata$group== "2", ][chull(plottingdata[plottingdata$group== 
+                                                                   "2", c("nmds_i", "nmds_j")]), ] 
+Three <- plottingdata[plottingdata$group== "3", ][chull(plottingdata[plottingdata$group== 
+                                                                   "3", c("nmds_i", "nmds_j")]), ] 
+hull.data <- rbind(One,Two,Three) 
+
+plottingdata %>% 
+ggplot(aes(x = nmds_i, y = nmds_j)) +
+    #geom_point() +
+    geom_text(aes(x = nmds_i, y = nmds_j, label = sample_name), size = 2) +
+    geom_polygon(data = hull.data, aes(x = nmds_i, y = nmds_j, group = group, fill = group), alpha = .5)+
+    scale_fill_manual(values=c("black","lightblue","lightgreen"))
+```
+
+Here we did an nmds analysis based on the eDNA data (phylum level) and colored the sites by the groups we made.  
+We can distinguish the groups. Let's see what's happening : we'll look site by site.  
+
+```{r heatmap based on the eDNA index/site_week}
+# Prepare the table
+table_eDNA<-eDNAindex(table,site_week,Phylum,Tot_nReads)
+spread_table<-table_eDNA %>%
+  spread(Phylum,Normalized.reads)
+spread_table<-as.data.frame(spread_table)
+rownames(spread_table) <- spread_table[,1]
+spread_table<-spread_table[,-1] 
+spread_table[is.na(spread_table)] <- 0
+spread_table<-as.matrix(spread_table)
+# Heatmap
+heatmap(spread_table)
+```
+
+About half of the sites are characterized by a high eDNA index of Mollusca. The other half has a more homogeneous distribution of phyla, a higher diversity.  
+Let's first look closer, site by site in each period.   
+
+```{r Glacier heatmap based on the eDNA index, site per site}
+# Select site per site
+spread_table_site<-as.data.frame(spread_table)
+rownames(spread_table_site) -> spread_table_site$site_week
+spread_table_site<-separate(spread_table_site,site_week, c("site","week"), sep = "_")
+spread_table_site<-select(spread_table_site,-c("week"))
+
+# Site: Glacier (1) :
+Glacier<-spread_table_site[spread_table_site$site=="Glacier",]
+Glacier<-select(Glacier,-c("site"))
+Glacier<-as.matrix(Glacier)
+heatmap(Glacier)
+```
+
+- High eDNA index of molluscs in June.   
+- High eDNA index of porifera & chordata in July.  
+- Still high eDNA index of porifera in August + Arthropoda & Cnidaria.  
+
+```{r Osian heatmap based on the eDNA index, site per site}
+# Site: Osian (2) :
+Osian<-spread_table_site[spread_table_site$site=="Osian",]
+Osian<-select(Osian,-c("site"))
+Osian<-as.matrix(Osian)
+heatmap(Osian)
+```
+
+- High eDNA index of Ochrophyta and Rhodophyta en June et July.  
+- High eDNA index of Mollusca in august.   
+
+```{r Bloomstrand heatmap based on the eDNA index, site per site}
+# Site: Bloomstrand (3) :
+Bloomstrand<-spread_table_site[spread_table_site$site=="Bloomstrand",]
+Bloomstrand<-select(Bloomstrand,-c("site"))
+Bloomstrand<-as.matrix(Bloomstrand)
+heatmap(Bloomstrand)
+```
+
+- High eDNA index of Porifera, Bryozoa, Chordata, Chlorophyta in June.  
+- High eDNA index of Mollusc in July & August which seems to have erased the observation of the other phyla, perhaps still very present.  
+
+```{r Hansneset heatmap based on the eDNA index, site per site}
+# Site: Hansneset (4) :
+Hansneset<-spread_table_site[spread_table_site$site=="Hansneset",]
+Hansneset<-select(Hansneset,-c("site"))
+Hansneset<-as.matrix(Hansneset)
+heatmap(Hansneset)
+```
+
+- High eDNA index of Annelida and Porifera in June.  
+- High eDNA index of Cnidaria & Porifera in July.  
+- High eDNA index of Echinoderma, Cnidaria & Rhodophyta in august.  
+
+```{r French heatmap based on the eDNA index, site per site}
+# Site: French (5) :
+French<-spread_table_site[spread_table_site$site=="French",]
+French<-select(French,-c("site"))
+French<-as.matrix(French)
+heatmap(French)
+```
+
+- High eDNA indexordiellipse of Porifera, Arthropoda, Cnidaria, Rhodophyta & Chlorophyta in June.  
+- High eDNA index of mollusca & rhodophyta in July.  
+- High eDNA index of mollusca in July (more Mollusca or less Rhodophyta ...?).  
+
+```{r Kongsfjordneset heatmap based on the eDNA index, site per site}
+# Site: Kongsfjordneset (6) :
+Kong<-spread_table_site[spread_table_site$site=="Kongsfjordneset",]
+Kong<-select(Kong,-c("site"))
+Kong<-as.matrix(Kong)
+heatmap(Kong)
+```
+
+- High eDNA index of Mollusca and Ochrophyta in June.  
+- More Ochrophytes in July than in June and/or less molluscs ?  
+- More molluscs in August and/or less Ochrophyta in August ? (end of season?).  
+
+Let's plot again the previous nmds (based on the eDNA data at the phylum level) and distinguish :  
+1. Sites with high eDNA index in Mollusca.  
+2. Sites without.  
+  
+```{r nmds Level 1,results=FALSE}
+# LEVEL 1
+table_L1<-table_L1_L2
+#table_L1$Site<-c("A1","A2","A3","A4","A5","A6","B1","C1","C2","C3","C4","C5","D2","D3","D4")
+table_L1$Site<-c("A1","B1","C1","A2","C2","D2","A3","C3","D3","A4","C4","D4","A5","C5","E5","A6a","A6b","A6c")
+#table_L1$biocluster_L1<-c("1","1","1","2","2","2","2","2","2","1","2","1","2","2","3","2","2","2")
+table_L1$biocluster_L1<-c("1","1","1","2","2","2","2","2","2","1","1","1","2","2","2","2","2","2")
+table_L1$L1<-paste0(table_L1$Site,"_",table_L1$biocluster_L1)
+table_L1<-select(table_L1,-c("Cluster_site","Site","biocluster_L1"))
+
+rownames(table_L1) <- table_L1$L1
+table_L1<-table_L1[,-12] 
+table_L1 <- table_L1 %>% mutate_if(is.character, as.numeric)
+table_L1<-as.matrix(table_L1)
+#NMDS:
+nmds<-metaMDS(table_L1)
+
+# organise the table to plot the nmds with polygons
+table_L1<-as.data.frame(table_L1)
+table_L1$Site<-c("A1","B1","C1","A2","C2","D2","A3","C3","D3","A4","C4","D4","A5","C5","E5","A6a","A6b","A6c")
+#table_L1$Site<-c("A1","A2","A3","A4","A5","A6","B1","C1","C2","C3","C4","C5","D2","D3","D4")
+table_L1$biocluster_L1<-c("1","1","1","2","2","2","2","2","2","1","1","1","2","2","2","2","2","2")
+#table_L1$biocluster_L1<-c("1","2","2","1","2","2","1","1","2","2","1","2","2","2","1")
+
+plottingdata <- table_L1 %>% 
+  dplyr::select(Site,biocluster_L1) %>% 
+  distinct() %>% 
+  unite(c(Site,biocluster_L1), col = "sample_name", remove = F) %>% 
+  mutate(nmds_i = nmds$points[,1],
+         nmds_j = nmds$points[,2]) 
+
+L1_1 <- plottingdata[plottingdata$biocluster_L1== "1", ][chull(plottingdata[plottingdata$biocluster_L1== 
+                                                                   "1", c("nmds_i", "nmds_j")]), ] 
+L1_2 <- plottingdata[plottingdata$biocluster_L1== "2", ][chull(plottingdata[plottingdata$biocluster_L1== 
+                                                                   "2", c("nmds_i", "nmds_j")]), ]
+ 
+hull.data <- rbind(L1_1,L1_2) 
+
+plottingdata %>% 
+ggplot(aes(x = nmds_i, y = nmds_j)) +
+    #geom_point() +
+    geom_text(aes(x = nmds_i, y = nmds_j, label = sample_name), size = 2) +
+    geom_polygon(data = hull.data, aes(x = nmds_i, y = nmds_j, group = biocluster_L1, fill = biocluster_L1), alpha = .5)+
+    scale_fill_manual(values=c("purple","orange"))
+```
+
+We see that we can easily distinguish these two groups.  
+This grouping is really close to the one we did when looking only at the environmental data.  
+Let's see if when Molluscs are removed we can still distinguish those groups.  
+
+```{r no Mollusca}
+table_noMollusca<-table[-multi_grep(c("Mollusca"),table$Phylum),]
+
+table_noMollusca<-table_noMollusca %>%
+  group_by(Phylum,Site,Month) %>%
+  summarise(Tot_nReads=sum(Tot_nReads))%>%
+  ungroup()
+head(table_noMollusca)
+
+table_noMollusca$Cluster_site<-paste0(table_noMollusca$Site,"_",table_noMollusca$Month)
+
+
+# calculate the eDNA index based on the cluster & site
+table_eDNAindex<-eDNAindex(table_noMollusca,Cluster_site,Phylum,Tot_nReads)
+
+data<-table_eDNAindex #for bubleplot later
+
+# Organize the table to do the nmds
+table_eDNAindex<-table_eDNAindex %>%
+  spread(Phylum,Normalized.reads)
+table_eDNAindex[is.na(table_eDNAindex)] <- 0
+table_eDNAindex<-as.data.frame(table_eDNAindex)
+table_L1_L2<-table_eDNAindex #for later
+rownames(table_eDNAindex) <- table_eDNAindex[,1]
+table_eDNAindex<-table_eDNAindex[,-1] 
+table_eDNAindex <- table_eDNAindex %>% mutate_if(is.character, as.numeric)
+table_eDNAindex<-as.matrix(table_eDNAindex)
+#table_eDNAindex<-t(table_eDNAindex)
+# NMDS:
+nmds<-metaMDS(table_eDNAindex)
+#stressplot(nmds)
+
+# organise the table to plot the nmds with polygons
+table_eDNAindex<-as.data.frame(table_eDNAindex)
+#table_eDNAindex$Site<-c("1","2","3","4","5","6","1","1","2","3","4","5","2","3","4")
+table_eDNAindex$group<-c("3","3","3","1","1","1","1","1","1","3","3","3","1","1","1","2","2","2")
+#table_eDNAindex$Site<-c("1","2","3","4","5","6","1","1","2","3","4","5","2","3","4")
+table_eDNAindex$Site<-c("1","1","1","2","2","2","3","3","3","4","4","4","5","5","5","6","6","6")
+table_eDNAindex$Month<-c("June","July","August","June","July","August","June","July","August","June","July","August","June","July","August","June","July","August")
+
+plottingdata <- table_eDNAindex %>% 
+  dplyr::select(Site,Month,group) %>% 
+  distinct() %>% 
+  unite(c(Site,Month,group), col = "sample_name", remove = F) %>% 
+  mutate(nmds_i = nmds$points[,1],
+         nmds_j = nmds$points[,2]) 
+
+
+
+
+#plottingdata %>% 
+#ggplot(aes(x = nmds_i, y = nmds_j)) +
+    #geom_point() +
+    #geom_text(aes(x = nmds_i, y = nmds_j, label = sample_name), size = 2) +
+    #geom_polygon(data = hull.data, aes(x = nmds_i, y = nmds_j, group = Cluster, fill = Cluster), alpha = .5)+
+    #scale_fill_manual(values=c("black","lightblue","lightgreen","red"))
+
+One <- plottingdata[plottingdata$group== "1", ][chull(plottingdata[plottingdata$group== 
+                                                                   "1", c("nmds_i", "nmds_j")]), ] 
+Two <- plottingdata[plottingdata$group== "2", ][chull(plottingdata[plottingdata$group== 
+                                                                   "2", c("nmds_i", "nmds_j")]), ]
+Three <- plottingdata[plottingdata$group== "3", ][chull(plottingdata[plottingdata$group== 
+                                                                   "3", c("nmds_i", "nmds_j")]), ]
+
+hull.data <- rbind(One,Two,Three)
+
+plottingdata %>% 
+ggplot(aes(x = nmds_i, y = nmds_j)) +
+    #geom_point() +
+    geom_text(aes(x = nmds_i, y = nmds_j, label = sample_name), size = 2) +
+  geom_text(aes(x = nmds_i, y = nmds_j, label = sample_name), size = 2) +
+    geom_polygon(data = hull.data, aes(x = nmds_i, y = nmds_j, group = group, fill = group), alpha = .5)
+
+Glacier <- plottingdata[plottingdata$Site== "1", ][chull(plottingdata[plottingdata$Site== 
+                                                                   "1", c("nmds_i", "nmds_j")]), ] 
+Osian <- plottingdata[plottingdata$Site== "2", ][chull(plottingdata[plottingdata$Site== 
+                                                                   "2", c("nmds_i", "nmds_j")]), ]
+Bloomstrand <- plottingdata[plottingdata$Site== "3", ][chull(plottingdata[plottingdata$Site== 
+                                                                   "3", c("nmds_i", "nmds_j")]), ]
+Hansneset <-plottingdata[plottingdata$Site== "4", ][chull(plottingdata[plottingdata$Site== 
+                                                                   "4", c("nmds_i", "nmds_j")]), ]
+French <-plottingdata[plottingdata$Site== "5", ][chull(plottingdata[plottingdata$Site== 
+                                                                   "5", c("nmds_i", "nmds_j")]), ]
+Kongs <-plottingdata[plottingdata$Site== "6", ][chull(plottingdata[plottingdata$Site== 
+                                                                   "6", c("nmds_i", "nmds_j")]), ]
+hull.data <- rbind(Glacier,Osian,Bloomstrand,Hansneset,French,Kongs) 
+
+plottingdata %>% 
+ggplot(aes(x = nmds_i, y = nmds_j)) +
+    #geom_point() +
+    geom_text(aes(x = nmds_i, y = nmds_j, label = sample_name), size = 2) +
+    geom_polygon(data = hull.data, aes(x = nmds_i, y = nmds_j, group = Site, fill = Site), alpha = .5)
+
+```
+
+Here is the nmds based on the eDNA index (phylum level) without the Mollusca phylum. 
+In the first graph, colors correspond to groups, in the seconds one they correspond to sites.  
+Site 2 & 5 (Osian & French) interesect with many points close to each other (excepted the point of August of Site 5, middle top) 
+Sites 3 & 6 (Bloomstrand & Kongsfjordneset) intersect with each others due to their June points of site 6.  
+Site 1 & 4 (Glacier & Hansneset) stands out well from the others and intersect each others due to their June points.  
+  
+We can still distinguish our groups (mainly group 1 vs group 3).  
+  
+Looking at the eDNA data, we can reproduce part of the trophic network in Kongsfjorden.   
+Remark: Bird & sea lion presence is based on our observations in summer 2021 & publications. 
+Crabs, Urchin, Brittle stars, Clams & Kelp presence is based on our eDNA data.   
+  
+![](Network.png)
+  
+Sites 1, 2, 3 & 5 are characterized by the presence of birds (guillemots, puffin & seagull).  
+Sites 1, 2 & 4, closest to the glaciers, are characterized by the presence of sealion.  
+
+The eDNA index of clams (Mollusca) is high in all the sites except at site 4 (Hansneset) where brittle stars have been detected (high eDNA index). Brittle stars feed on clams. Moreover, sites 4 is the only site where crabs DNA was detected & crabs feed on urchin. Thus, the presence of theses predators could explain that clams may be less abundant compared to its predators (cf. the other sites).
+
+Let's make a stacked bar plot.  
+```{r Stacked bar plot}
+table_barplot<-table %>%
+  drop_na(Phylum,Site)%>%
+  group_by(Phylum,Site) %>%
+  summarise(Tot_nReads=sum(Tot_nReads))%>%
+  ungroup()
+
+# calculate the eDNA index based on the cluster & site
+table_barplot<-eDNAindex(table_barplot,Site,Phylum,Tot_nReads)
+
+library(RColorBrewer)
+ggplot(table_barplot,            # Create ggplot2 plot scaled to 1.00
+              aes(x = Site,
+                  y = Normalized.reads,
+                  fill = Phylum)) +
+  scale_fill_brewer(palette = "Paired") +
+  theme_classic()+
+  geom_bar(position = "fill", stat = "identity")
+
+```
+
+Why do we find "many" brittle stars at Site 4 (Hansneset) ? The species responsible for this high eDNA index is Ophiopholis aculeata, known to like areas protected from the currents. This is exactly the case of site 4, that is in a small bay. 
+  
+Why do we find many birds & sea lions in the inner/middle fjord ? Their presence is link with sea ice presence. This means that climate change could have an impact on their repartition & thus on the benthic communities (see the trophic food web we designated).  
+  
+However, we did not find a direct link between the environmental data we took & our eDNA data. Unless salinity, light & nutrients concentrations are important for benthic species, they might not be sufficiently different in between sites to cause a variations in benthic fauna & flora distribution. However, the repartition of their predators (linked with the presence of their preys, not only benthic) seems to have the main role on the differences on benthic communities we find between sites. 
