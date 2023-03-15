@@ -24,13 +24,13 @@ library(firatheme)
 library(FactoMineR)
 suppressPackageStartupMessages(library(factoextra))
 suppressPackageStartupMessages(library(vegan))
-setwd("~/Desktop/These/Field-eDNA/eDNA/R-eDNA")
+#setwd("~/Desktop/These/Field-eDNA/eDNA/R-eDNA")
 source("./scripts/eDNAindex.R") #https://github.com/ramongallego/eDNA_functions
 ```
 
 ```{r Load}
 # Load the env_data
-env_data <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/env_data.xls", 
+env_data <- read_excel("./data/env_data.xls", 
                             col_types = c("text", "numeric", "numeric", 
                                                     "numeric", "date", "numeric", 
                                                     "numeric", "numeric", "numeric", 
@@ -39,7 +39,7 @@ env_data <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/env_data.xls
                                                     "numeric", "numeric", "numeric", 
                                                     "numeric", "text", "text"))
 # Load site location
-Site_location <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/Sites.xlsx", col_types = c("text", "numeric", "numeric", "numeric"))
+Site_location <- read_excel("./data/Sites.xlsx", col_types = c("text", "numeric", "numeric", "numeric"))
 env_data<-merge(env_data,Site_location,by="Site" )
 rm(Site_location)
 ```
@@ -214,12 +214,12 @@ Let's use these clusters & groups on the eDNA data and see if we can distinguish
 ### eDNA data
 ```{r Load & prepare eDNA data,results = FALSE}
 # Load and merge 18S data
-ASV_table_18S <- read_csv("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/18S_ASV_table_fwd.csv", col_types = cols(nReads = col_number()))
-tax_table_18S <- read_delim("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/tax_table_S_modified.csv",delim = ";", escape_double = FALSE, trim_ws = TRUE)
+ASV_table_18S <- read_csv("./data/18S_ASV_table_fwd.csv", col_types = cols(nReads = col_number()))
+tax_table_18S <- read_delim("./data/tax_table_S_modified.csv",delim = ";", escape_double = FALSE, trim_ws = TRUE)
 eDNA_table_18S<-merge(ASV_table_18S,tax_table_18S,by="Hash")
 # Load and merge COI data
-ASV_table_COI <- read_csv("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/COI_ASV_table.csv", col_types = cols(nReads = col_number()))
-tax_table_COI <- read_excel("~/Desktop/These/Field-eDNA/eDNA/R-eDNA/data/COI.xls")
+ASV_table_COI <- read_csv("./data/COI_ASV_table.csv", col_types = cols(nReads = col_number()))
+tax_table_COI <- read_excel("./data/COI.xls")
 eDNA_table_COI<-merge(ASV_table_COI,tax_table_COI,by="Hash")
 
 # Filter COI (18S already done)####
